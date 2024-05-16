@@ -1,81 +1,125 @@
 #!/usr/bin/env python3
-""" doc doc doc """
+"""
+create a filter, a filter provides a fine grained
+fgacility that determines where the log output
+its content
+"""
 import re
-from typing import List
 import logging
-import os
-import mysql.connector
-
-
-def filter_datum(
-    fields: List[str], redaction: str, message: str, separator: str
-) -> str:
-    """doc doc doc"""
-    for field in fields:
-        regex = f"{field}=[^{separator}]*"
-        message = re.sub(regex, f"{field}={redaction}", message)
-    return message
-
-
-class RedactingFormatter(logging.Formatter):
-    """doc doc doc"""
-
-    REDACTION = "***"
-    FORMAT = "[HOLBERTON] %(name)s %(levelname)s %(asctime)-15s: %(message)s"
-    SEPARATOR = ";"
-
-    def __init__(self, fields: List[str]):
-        """doc doc doc"""
-        super(RedactingFormatter, self).__init__(self.FORMAT)
-        self.fields = fields
-
-    def format(self, record: logging.LogRecord) -> str:
-        """doc doc doc"""
-        org = super().format(record)
-        return filter_datum(self.fields, self.REDACTION, org, self.SEPARATOR)
+from typing import List
+from os import getenv
+from mysql.connector import connection
 
 
 PII_FIELDS = ("name", "email", "phone", "ssn", "password")
 
 
+def filter_datum(
+        fields: List[str], redaction: str, message: str,
+        separator: str) -> str:
+    """
+    function to obfuscate/hide relevant information
+    of a field
+    Args:
+        field: list of strings representing all
+        field to obfuscate
+        redaction: a string representing by what the
+        string will be obfuscated
+        message: a string representing the log line
+        separator: a string representing by which the field
+        in the log line are delimited in the log line (message)
+    """
+    field_pattern = "|".join(fields)
+    line_pattern = r"({})=[^{}]*".format(field_pattern, separator)
+    re_daction = r"\1={}".format(redaction)
+    return re.sub(line_pattern, re_daction, message)
+
+
+class RedactingFormatter(logging.Formatter):
+    """
+    redaction formatter class
+    """
+    REDACTION = "***"
+    FORMAT = "[HOLBERTON] %(name)s %(levelname)s %(asctime)s-15s: %(message)s"
+    SEPARATOR = ";"
+
+    def __init__(self, fields: List[str]):
+        """
+        object factory: generating redaction object
+        """
+        super().__init__(self.FORMAT)
+        self.fields = fields
+
+    def format(self, record: logging.LogRecord) -> str:
+        """
+        method to filter values in incoming log records using filter_datum
+        """
+        return filter_datum(
+                self.fields,
+                self.REDACTION,
+                super().format(record),
+                self.SEPARATOR)
+
+
+# This a function not a method
 def get_logger() -> logging.Logger:
-    """doc doc doc"""
-    log = logging.getLogger("user_data")
-    log.setLevel(logging.INFO)
-    log.propagate = False
-    sh = logging.StreamHandler()
-    sh.setFormatter(RedactingFormatter(PII_FIELDS))
-    log.addHandler(sh)
-    return log
+    """
+    A function that takes no argument but returns a login.Logger object
+    """
+    logger = logging.getLogger("user_data")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    formatter = RedactingFormatter(PII_FIELDS)
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+    return logger
 
 
-def get_db() -> mysql.connector.connection.MySQLConnection:
-    """doc doc doc"""
-    username = os.getenv("PERSONAL_DATA_DB_USERNAME", "root")
-    password = os.getenv("PERSONAL_DATA_DB_PASSWORD", "")
-    host = os.getenv("PERSONAL_DATA_DB_HOST", "localhost")
-    db_name = os.getenv("PERSONAL_DATA_DB_NAME")
+def get_db() -> connection.MySQLConnection:
+    """
+    function that returns a connector to the database
+    """
+    # note: os.getenv does the same thing
+    username = getenv("PERSONAL_DATA_DB_USERNAME", "root")
+    password = getenv("PERSONAL_DATA_DB_PASSWORD", "")
+    db_host = getenv("PERSONAL_DATA_DB_HOST", "localhost")
+    db_name = getenv("PERSONAL_DATA_DB_NAME")
 
-    return mysql.connector.connect(
-        user=username, password=password, host=host, database=db_name
-    )
+    connector = connection.MySQLConnection(
+            user=username,
+            password=password,
+            database=db_name,
+            host=db_host
+        )
+    return connector
 
 
-def main() -> None:
-    """doc doc doc"""
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT * FROM users;")
-    log = get_logger()
-    for row in cursor:
-        data = []
-        for desc, value in zip(cursor.description, row):
-            pair = f"{desc[0]}={str(value)}"
-            data.append(pair)
-        row_str = "; ".join(data)
-        log.info(row_str)
+def main():
+    """
+    function to get rows from the user table and display
+    them to the console
+    """
+    connector = get_db()
+    cursor = connector.cursor()
+    logger = get_logger()
+
+    query = "SELECT * FROM users"
+    cursor.execute(query)
+    all_rows = cursor.fetchall()
+
+    for row in all_rows:
+        field_1 = "name={}, email={}, phone={}, ssn={}, "
+        field_2 = "password={}, ip={}, last_login={}, user_agent={}"
+        fields = field_1 + field_2
+        fields = fields.format(
+                row[0], row[1], row[2], row[3],
+                row[4], row[5], row[6], row[7])
+        logger.info(fields)
+
     cursor.close()
-    db.close()
+    connector.close()
 
 
 if __name__ == "__main__":
